@@ -41,12 +41,16 @@
   .sw input:focus-visible + .track{outline:2px solid var(--gold);outline-offset:2px}
   .sw input:checked ~ .lbl{color:var(--paper)}
   .changes{color:var(--gold);font-weight:700}
+  h3.show{font-family:Cinzel,serif;font-weight:800;font-size:19px;color:var(--gold);margin:22px 0 4px}
+  h3.show:first-child{margin-top:4px}
+  .bulk{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 4px}
+  .bulk button{padding:6px 14px;font-size:14px}
   a{color:var(--gold)}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="top"><div class="logo">Mo<span>Flex</span></div><div class="sub">Admin · Tales Of The Legend</div></div>
+  <div class="top"><div class="logo">Mo<span>Flex</span></div><div class="sub">Admin · All shows</div></div>
 
   <section class="panel" id="connectPanel">
     <h2>Connect to your MoFlex repository</h2>
@@ -64,33 +68,52 @@
   <section class="panel" id="releasePanel" hidden>
     <h2>Releases</h2>
     <p class="hint">Turn on an episode or trailer to release it on MoFlex. Nothing changes on the site until you select Publish changes. The site updates about a minute after publishing.</p>
-    <table>
-      <thead><tr><th>Episode</th><th>Episode video</th><th>Trailer</th></tr></thead>
-      <tbody id="rows"></tbody>
-    </table>
+    <div id="groups"></div>
     <div class="btns"><button class="primary" id="publish" disabled>Publish changes</button><button id="reload">Reload from GitHub</button></div>
     <div class="status" id="pubStatus"></div>
     <p class="hint" style="margin-top:14px">Live site: <a id="siteLink" target="_blank" rel="noopener"></a></p>
   </section>
 </div>
 <script>
-  const EPISODES = ['Ancient Beginnings', 'The Island Journey', 'The Gift of the Nile', 'The Island of Islands', 'Between Two Rivers', 'Ancient Rome', 'The Rise and Fall of Al-Hums', 'Ginga'];
+  // Every show on MoFlex. The first show uses the top-level lists in availability.json (the original format);
+  // other shows are stored under "shows": { "<id>": { "episodes": [...], "trailers": [...] } }.
+  const SHOWS = [
+    { id: 'tales-of-the-legend', title: 'Tales Of The Legend', episodes: ['Ancient Beginnings', 'The Island Journey', 'The Gift of the Nile', 'The Island of Islands', 'Between Two Rivers', 'Ancient Rome', 'The Rise and Fall of Al-Hums', 'Ginga'] },
+    { id: 'a-fix-in-time', title: 'A Fix In Time', episodes: ['The Watch', 'The Great Wall', 'The Castle Siege', 'The Elephant Clock', 'The Wild West', 'The Moon Landing', 'The Final Fix'] }
+  ];
   const $ = id => document.getElementById(id);
   const store = { get: k => { try { return localStorage.getItem('moflex-admin-' + k) || ''; } catch (e) { return ''; } }, set: (k, v) => { try { localStorage.setItem('moflex-admin-' + k, v); } catch (e) { } }, del: k => { try { localStorage.removeItem('moflex-admin-' + k); } catch (e) { } } };
   ['owner', 'repo', 'branch', 'token'].forEach(k => { const v = store.get(k); if (v) $(k).value = v; });
-  let sha = null, saved = { episodes: [], trailers: [] }, draft = { episodes: [], trailers: [] };
+  const empty = () => Object.fromEntries(SHOWS.map(s => [s.id, { episodes: [], trailers: [] }]));
+  let sha = null, raw = {}, saved = empty(), draft = empty();
   const cfg = () => ({ owner: $('owner').value.trim(), repo: $('repo').value.trim(), branch: $('branch').value.trim() || 'main', token: $('token').value.trim() });
   const api = c => `https://api.github.com/repos/${encodeURIComponent(c.owner)}/${encodeURIComponent(c.repo)}/contents/availability.json`;
   const headers = c => ({ 'Accept': 'application/vnd.github+json', 'Authorization': 'Bearer ' + c.token, 'X-GitHub-Api-Version': '2022-11-28' });
   const b64decode = s => decodeURIComponent(escape(atob(s.replace(/\n/g, ''))));
   const b64encode = s => btoa(unescape(encodeURIComponent(s)));
+  const nums = a => (Array.isArray(a) ? a : []).map(Number);
+  function readLists(data) {
+    const out = empty();
+    SHOWS.forEach((s, i) => { const src = i === 0 ? data : ((data.shows || {})[s.id] || {}); out[s.id] = { episodes: nums(src.episodes), trailers: nums(src.trailers) }; });
+    return out;
+  }
+  // Keep anything else already in the file, and write each show back in its own place.
+  function buildFile() {
+    const out = JSON.parse(JSON.stringify(raw || {}));
+    out.episodes = draft[SHOWS[0].id].episodes; out.trailers = draft[SHOWS[0].id].trailers;
+    out.shows = Object.assign({}, out.shows || {});
+    SHOWS.slice(1).forEach(s => { out.shows[s.id] = { episodes: draft[s.id].episodes, trailers: draft[s.id].trailers }; });
+    return out;
+  }
   function setStatus(el, text, kind) { el.textContent = text; el.className = 'status' + (kind ? ' ' + kind : ''); }
-  function sameLists() { const eq = (a, b) => a.slice().sort().join() === b.slice().sort().join(); return eq(saved.episodes, draft.episodes) && eq(saved.trailers, draft.trailers); }
+  function sameLists() { const eq = (a, b) => a.slice().sort().join() === b.slice().sort().join(); return SHOWS.every(s => eq(saved[s.id].episodes, draft[s.id].episodes) && eq(saved[s.id].trailers, draft[s.id].trailers)); }
+  const sw = (sid, kind, n) => { const on = draft[sid][kind].includes(n); return `<label class="sw"><input type="checkbox" data-show="${sid}" data-kind="${kind}" data-n="${n}" ${on ? 'checked' : ''}><span class="track"></span><span class="lbl">${on ? 'Released' : 'Not released'}</span></label>`; };
   function render() {
-    $('rows').innerHTML = EPISODES.map((t, i) => { const n = i + 1; return `<tr><td class="ep">Episode ${n}<small>${t}</small></td>
-      <td><label class="sw"><input type="checkbox" data-kind="episodes" data-n="${n}" ${draft.episodes.includes(n) ? 'checked' : ''}><span class="track"></span><span class="lbl">${draft.episodes.includes(n) ? 'Released' : 'Not released'}</span></label></td>
-      <td><label class="sw"><input type="checkbox" data-kind="trailers" data-n="${n}" ${draft.trailers.includes(n) ? 'checked' : ''}><span class="track"></span><span class="lbl">${draft.trailers.includes(n) ? 'Released' : 'Not released'}</span></label></td></tr>`; }).join('');
-    $('rows').querySelectorAll('input').forEach(inp => inp.addEventListener('change', () => { const k = inp.dataset.kind, n = +inp.dataset.n; draft[k] = inp.checked ? [...new Set([...draft[k], n])].sort((a, b) => a - b) : draft[k].filter(x => x !== n); render(); }));
+    $('groups').innerHTML = SHOWS.map(s => `<h3 class="show">${s.title}</h3>
+      <div class="bulk"><button data-bulk="on" data-show="${s.id}">Release all</button><button data-bulk="off" data-show="${s.id}">Hide all</button></div>
+      <table><thead><tr><th>Episode</th><th>Episode video</th><th>Trailer</th></tr></thead><tbody>${s.episodes.map((t, i) => { const n = i + 1; return `<tr><td class="ep">Episode ${n}<small>${t}</small></td><td>${sw(s.id, 'episodes', n)}</td><td>${sw(s.id, 'trailers', n)}</td></tr>`; }).join('')}</tbody></table>`).join('');
+    $('groups').querySelectorAll('input').forEach(inp => inp.addEventListener('change', () => { const d = draft[inp.dataset.show], k = inp.dataset.kind, n = +inp.dataset.n; d[k] = inp.checked ? [...new Set([...d[k], n])].sort((a, b) => a - b) : d[k].filter(x => x !== n); render(); }));
+    $('groups').querySelectorAll('button[data-bulk]').forEach(b => b.addEventListener('click', () => { const s = SHOWS.find(x => x.id === b.dataset.show); const all = s.episodes.map((_, i) => i + 1); draft[s.id] = b.dataset.bulk === 'on' ? { episodes: all.slice(), trailers: all.slice() } : { episodes: [], trailers: [] }; render(); }));
     const changed = !sameLists(); $('publish').disabled = !changed; if (changed) setStatus($('pubStatus'), 'You have changes that are not published yet.', ''); else if (!$('pubStatus').classList.contains('ok')) setStatus($('pubStatus'), '', '');
   }
   async function load() {
@@ -101,8 +124,8 @@
       if (r.status === 401) throw new Error('GitHub rejected the token. Check that you copied the whole token and that it has not expired.');
       if (r.status === 404) throw new Error('availability.json was not found. Check the username, repository name and branch, and that the file is in the main folder of the repository.');
       if (!r.ok) throw new Error('GitHub returned an error (' + r.status + '). Try again in a moment.');
-      const j = await r.json(); sha = j.sha; const data = JSON.parse(b64decode(j.content));
-      saved = { episodes: (data.episodes || []).map(Number), trailers: (data.trailers || []).map(Number) }; draft = JSON.parse(JSON.stringify(saved));
+      const j = await r.json(); sha = j.sha; raw = JSON.parse(b64decode(j.content)) || {};
+      saved = readLists(raw); draft = JSON.parse(JSON.stringify(saved));
       ['owner', 'repo', 'branch', 'token'].forEach(k => store.set(k, $(k).value.trim()));
       setStatus($('connStatus'), 'Connected to ' + c.owner + '/' + c.repo + '.', 'ok');
       $('releasePanel').hidden = false; const site = `https://${c.owner}.github.io/${c.repo}/`; $('siteLink').href = site; $('siteLink').textContent = site; setStatus($('pubStatus'), '', ''); render();
@@ -110,13 +133,14 @@
   }
   async function publish() {
     const c = cfg(); $('publish').disabled = true; setStatus($('pubStatus'), 'Publishing…', '');
-    const body = { message: 'Update MoFlex releases', content: b64encode(JSON.stringify({ episodes: draft.episodes, trailers: draft.trailers }, null, 2) + '\n'), sha, branch: c.branch };
+    const file = buildFile();
+    const body = { message: 'Update MoFlex releases', content: b64encode(JSON.stringify(file, null, 2) + '\n'), sha, branch: c.branch };
     try {
       const r = await fetch(api(c), { method: 'PUT', headers: Object.assign({ 'Content-Type': 'application/json' }, headers(c)), body: JSON.stringify(body) });
       if (r.status === 409) throw new Error('The release list changed on GitHub since you loaded it. Select Reload from GitHub, then make your changes again.');
       if (r.status === 403 || r.status === 404) throw new Error('This token is not allowed to change the repository. Give it Contents: Read and write access to your MoFlex repository.');
       if (!r.ok) throw new Error('Publishing failed (' + r.status + '). Try again in a moment.');
-      const j = await r.json(); sha = j.content.sha; saved = JSON.parse(JSON.stringify(draft)); render();
+      const j = await r.json(); sha = j.content.sha; raw = file; saved = JSON.parse(JSON.stringify(draft)); render();
       setStatus($('pubStatus'), 'Published. MoFlex shows the change in about a minute.', 'ok');
     } catch (e) { setStatus($('pubStatus'), e.message, 'err'); $('publish').disabled = false; }
   }
